@@ -1,0 +1,124 @@
+---
+title: "Determining if Exercises are Performed Correctly Based on Accelerometer Data"
+output: html_document
+---
+
+###Executive Summary
+I wanted to determine if it was possible to predict if a person was performing an exercise correctly based on accelerometer data. I used the "Weight Lifting Exercises Data Set" test and training sets from Groupware@LES (1) to perform this analysis. After splitting the training set into a primary training testing training set for future corr-validation purposes, I performed some initial exploratory analysis and data cleaning. I decided to reduce the number of variables by deleting all those with NA values and those with a correlation of less than abs(0.05) to the Classe variable. I used the Classe variables as it indicated how well the exercise was performed. After reducing my data set, I ran a random forest classification to determine the best set of predictors. I used random forest as I wanted high accuracy and I was willing to sacrifice run time. This model gave me an out of sample error of 1.38%. I then performed cross-validation on the model using my training testing set and got a accuracy rate of 98.55% which was in-line with my previous sample error. I used this model to run my testing data set and I was able to predict all 20 observations correctly.
+
+###Analysis and Predictions
+####Data Cleaning
+
+After downloading the testing and training data sets from Group@LES I decided to partition my training data set. I knew I would want to cross-validate my results later and opted to perform all analysis on only the true training data set and leave the testTraining data set for cross-validation. I placed 60% of my training data in the training set and 40% in the testTraining set based on the standard rule of thumb. I performed a summary on the training data set and found several columns with only NA for most of the observations. I removed all of these columns. I also noticed columns for X, user name, raw time stamps, and windows. I decided to also remove these columns. I removed these as I wanted to focus strictly on the accelerometer data. My assumption was while time may be a good indicator in this data set of completion of the activity I felt that in the future that it would be more of an predictor for an individual than a population. The weight of the dumbbell and a person's prior activity level could heavily effect this reading, as such I decided to remove it.
+
+```{r, cache=TRUE}
+#setup packages
+require(caret)
+require(ggplot2)
+require(gridExtra)
+require(randomForest)
+
+#set working directory
+setwd("~/Data Scientist Spec/Pratical Machine Learning/Course Project")
+
+#Read ind ata
+train <- read.csv("pml-training.csv",na.strings=c("", "NA"))
+test <- read.csv("pml-testing.csv",na.strings=c("", "NA"))
+subsetTrain <- createDataPartition(train$classe, p = 0.6, list = FALSE)
+newTrain <- train[subsetTrain,]
+testTrain <- train[-subsetTrain,]
+
+#the "classe" variable should show the manner in which they did the exercise
+summary(newTrain$classe)
+
+#get number of NA values in columns to see what we can remove
+countNAs <- data.frame(colSums(!is.na(newTrain)))
+countNAs$colName <- rownames(countNAs)
+someNAs <- countNAs[countNAs[,1]!=nrow(newTrain),2]
+noNAs <- countNAs[countNAs[,1]==nrow(newTrain),2]
+
+#remove columns with NA data
+newTrain <- newTrain[,noNAs]
+newTrain.simple <- subset(newTrain, select=-c(1:7,60))
+
+```
+
+####Exploratory Analysis
+
+After cleaning my data I decided to review the remaining variables. With 60 variables left I knew that my classification model runs could potentially take a long time. I decided to try to perform a pair-wise analysis with the Classe variable to find higher correlated options. I used the Classe variable since it was an indicator of how well the activity was performed. It became quickly apparent the results was very difficult to understand. I then created a correlation of the variables and plotted the results. I decided to use all variables with a correlation higher than absolute(0.05). This is still a very low correlation but since nothing had a higher then an absolute(0.3) correlation I tried to use a value to return about half of the initial values. I used this result to trim down my data set perform creating my model.
+
+```{r, cache=TRUE}
+#setp data to perform correlation
+newTrain$classe <- as.numeric(newTrain$classe)
+corrTrain <- data.frame(cor(newTrain.simple,newTrain$classe))
+
+#plot results
+plot1 <- qplot(x=corrTrain$colName,y=corrTrain$cor.newTrain.simple..newTrain.classe.,ylab="Correlation",xlab="Variable",main="Correlation of Non-NA Variables to the Classe Variable")+
+    geom_point()+geom_hline(yintercept=0.05,colour="red")+geom_hline(yintercept=-0.05,colour="red")+geom_hline(yintercept=0.0,colour="black")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#Get the correlations over abs(0.05)
+corrTrain$colName <- rownames(corrTrain)
+corrTrain.names <- c(corrTrain[which(abs(corrTrain[,1]) > abs(0.05)),2],"classe")
+
+#create data set with jsut variable of interest
+newTrain2 <- newTrain[,corrTrain.names]
+newTrain2$classe <- as.factor(newTrain2$classe)
+
+```
+
+```{r, cache=TRUE}
+plot1
+```
+
+####Model Creation and Analysis
+
+I used the randomForest package with the randomForest function to create my model. I decided to use this method based on the number of variables, that I had no idea what the underlying function might be, and I wanted high accuracy. I used this package instead do caret as it returned the results much faster (~3 minutes vs ~35 minutes) and I was able to easily plot the results. My initial model results produced an error estimate of 1.38%. Below you can see a figure depicting my error estimates for OOB and the factors of Classe. I have only shown the first 50 trees because after that the noise was very small. I have also included the importance graph to show how the remaining variables effected the predicition. The top 5 predictors were total arm acceleration, total forarm acceleration, acceleration of the arm over the y plane, total belt acceleration, and magnitude of the arm over the z plane.
+
+```{r, cache=TRUE}
+modFit <- randomForest(classe ~ ., data=newTrain2)
+modColNames <- c("Est Error OOB", "A", "B", "C", "D", "E")
+
+modFit2 <- randomForest(classe ~ ., data=newTrain2,ntree=50)
+```
+
+```{r, cache=TRUE}
+modColNames <- c("OOB", "A", "B", "C", "D", "E")
+plot(modFit2, main="Results of RandomForest Classifcation Model")
+legend("topright", modColNames ,col=1:6,cex=0.8,fill=1:6)
+
+varImpPlot(modFit2, main="Importance of Variables in Random Forest")
+```
+
+####Cross-Validation
+
+Once I was comfortable with my model I performed a cross-validation using my testTraining data set and the predict function. The accuracy rating of this model was 98.55% which was consistent with my expected value from my initial model. The tables of both model predictions are below.
+
+```{r, cache=TRUE}
+pred <- predict(modFit,testTrain)
+testTrain$classe <- as.numeric(testTrain$classe)
+testTrain$predRight <- pred == testTrain$classe
+predTable <- table(pred,testTrain$classe)
+cM <- confusionMatrix(pred,testTrain$classe)
+```
+
+```{r, cache=TRUE}
+modFit
+cM
+```
+
+####Final Predictions
+
+Based on the positive results from the cross-validation I applied the model to my test training set and I was able to accurately predict all 20 observations.
+
+```{r, cache=TRUE}
+pred <- predict(modFit,test)
+pred
+```
+
+###Summary
+
+Overall my random forest model was very accurate. It actually seemed to be too accurate but after referring to the literature published by the data set creators I found my results to be inline with theirs. Based on this and my overall results I would say it is possible to predict if an exercise is performed correctly based on accelerometer data. The 5 best predictors for this are total arm acceleration, total forarm acceleration, acceleration of the arm over the y plane, total belt acceleration, and magnitude of the arm over the z plane.
+
+###Citations
+
+(1) - Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
